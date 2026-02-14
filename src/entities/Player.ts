@@ -2,10 +2,16 @@ import Phaser from 'phaser';
 
 const SPEED = 160;
 const JUMP_VELOCITY = -330;
+const CLIMB_SPEED = 120;
 
 export class Player extends Phaser.Physics.Arcade.Sprite {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private keys!: { a: Phaser.Input.Keyboard.Key; d: Phaser.Input.Keyboard.Key; w: Phaser.Input.Keyboard.Key };
+  private keys!: {
+    a: Phaser.Input.Keyboard.Key;
+    d: Phaser.Input.Keyboard.Key;
+    w: Phaser.Input.Keyboard.Key;
+    s: Phaser.Input.Keyboard.Key;
+  };
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     super(scene, x, y, 'player_temp');
@@ -31,6 +37,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       a: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A),
       d: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D),
       w: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W),
+      s: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
     };
   }
 
@@ -42,18 +49,29 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const body = this.body as Phaser.Physics.Arcade.Body;
     const left = this.cursors.left.isDown || this.keys.a.isDown;
     const right = this.cursors.right.isDown || this.keys.d.isDown;
-    const jump = this.cursors.up.isDown || this.keys.w.isDown || this.cursors.space.isDown;
+    const up = this.cursors.up.isDown || this.keys.w.isDown;
+    const down = this.cursors.down.isDown || this.keys.s.isDown;
+    const jump = up || this.cursors.space.isDown;
 
-    if (left && !right) {
-      this.setVelocityX(-SPEED);
-    } else if (right && !left) {
-      this.setVelocityX(SPEED);
-    } else {
+    const canClimb = (body.blocked.left || body.blocked.right) && !body.blocked.down;
+
+    if (canClimb) {
+      body.setAllowGravity(false);
       this.setVelocityX(0);
-    }
+      this.setVelocityY(up ? -CLIMB_SPEED : down ? CLIMB_SPEED : 0);
+    } else {
+      body.setAllowGravity(true);
+      if (left && !right) {
+        this.setVelocityX(-SPEED);
+      } else if (right && !left) {
+        this.setVelocityX(SPEED);
+      } else {
+        this.setVelocityX(0);
+      }
 
-    if (jump && body.blocked.down) {
-      this.setVelocityY(JUMP_VELOCITY);
+      if (jump && body.blocked.down) {
+        this.setVelocityY(JUMP_VELOCITY);
+      }
     }
   }
 }
