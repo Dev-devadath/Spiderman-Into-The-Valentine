@@ -4,6 +4,15 @@ const SPEED = 160;
 const JUMP_VELOCITY = -330;
 const CLIMB_SPEED = 120;
 
+/** Display size for the sprite (scaled up from pixel art source) */
+const DISPLAY_WIDTH = 32;
+const DISPLAY_HEIGHT = 48;
+const RUN_TEXTURE = 'sidewayspidey';
+
+/** Breathing animation: spi1 (head up) + sp2 (head down) loop when idle */
+const BREATH_IDLE_DELAY_MS = 1200;
+const BREATH_FRAME_DURATION_MS = 650;
+
 export class Player extends Phaser.Physics.Arcade.Sprite {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private keys!: {
@@ -13,20 +22,36 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     s: Phaser.Input.Keyboard.Key;
   };
 
+  private idleTime = 0;
+  private breathFrame = 0;
+  private lastBreathTime = 0;
+
+  /** True while the player is mid-swing (movement handled externally) */
+  public isSwinging = false;
+
   constructor(scene: Phaser.Scene, x: number, y: number) {
-    super(scene, x, y, 'player_temp');
+    super(scene, x, y, 'spi1');
     scene.add.existing(this);
     scene.physics.add.existing(this);
 
-    this.setDisplaySize(32, 48);
+    this.setDisplaySize(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     this.setOrigin(0.5, 1);
     this.setupPhysics();
     this.setupInput();
   }
 
   private setupPhysics(): void {
-    this.body?.setSize(28, 46);
-    this.body?.setOffset(2, 2);
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    const fw = this.frame.width;
+    const fh = this.frame.height;
+
+    const bodyW = Math.round(fw * 0.5);
+    const bodyH = Math.round(fh * 0.85);
+    const offsetX = Math.round((fw - bodyW) / 2);
+    const offsetY = fh - bodyH;
+
+    body.setSize(bodyW, bodyH);
+    body.setOffset(offsetX, offsetY);
     this.setCollideWorldBounds(true);
   }
 
@@ -41,8 +66,46 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     };
   }
 
-  preUpdate(): void {
-    this.handleMovement();
+  preUpdate(_time: number, delta: number): void {
+    if (!this.isSwinging) {
+      this.handleMovement();
+    }
+    this.updateBreathing(delta);
+  }
+
+  private updateBreathing(delta: number): void {
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    const isRunning = Math.abs(body.velocity.x) > 1 && !this.isSwinging;
+    const isIdle =
+      this.body!.velocity.x === 0 &&
+      this.body!.velocity.y === 0 &&
+      body.blocked.down &&
+      !this.isSwinging &&
+      !(body.blocked.left || body.blocked.right);
+
+    // Keep running texture active while moving horizontally.
+    if (isRunning) {
+      this.idleTime = 0;
+      return;
+    }
+
+    if (!isIdle) {
+      this.idleTime = 0;
+      this.setTexture('spi1');
+      this.setFlipX(false);
+      return;
+    }
+
+    this.idleTime += delta;
+    if (this.idleTime < BREATH_IDLE_DELAY_MS) return;
+
+    const now = this.idleTime;
+    if (now - this.lastBreathTime >= BREATH_FRAME_DURATION_MS) {
+      this.lastBreathTime = now;
+      this.breathFrame = 1 - this.breathFrame;
+      this.setTexture(this.breathFrame === 0 ? 'spi1' : 'sp2');
+      this.setFlipX(false);
+    }
   }
 
   private handleMovement(): void {
@@ -63,8 +126,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       body.setAllowGravity(true);
       if (left && !right) {
         this.setVelocityX(-SPEED);
+        this.setTexture(RUN_TEXTURE);
+        this.setFlipX(true);
       } else if (right && !left) {
         this.setVelocityX(SPEED);
+        this.setTexture(RUN_TEXTURE);
+        this.setFlipX(false);
       } else {
         this.setVelocityX(0);
       }
