@@ -18,10 +18,31 @@ const HOLE_HEIGHT_THRESHOLD = 100;
 /** Collectible hearts */
 const HEART_DISPLAY_SIZE = 28;
 const HEART_SPAWN_CHANCE = 0.35; // 35% chance per building
+const FOURTH_POWERUP_SIZE = 34;
+const FOURTH_POWERUP_SPAWN_AHEAD = 260;
+const FOURTH_POWERUP_MISS_MARGIN = 130;
+const REWIND_GLITCH_DURATION_MS = 1200;
+const REWIND_GLITCH_TICK_MS = 70;
+const FIREBALL_CHALLENGE_VIEW_X = 480;
+const FIREBALL_SMALL_SPEED = 250;
+const FIREBALL_BIG_SPEED = 210;
+const FIREBALL_SPAWN_AHEAD = 520;
+const FIREBALL_WEB_THROW_RANGE = 150;
+const FIREBALL_WEB_THROW_DIST = 520;
+const FIREBALL_SMALL_SIZE = 28;
+const FIREBALL_BIG_SIZE = 36;
+const FIREBALL_ORBIT_RADIUS = 56;
+const FIREBALL_ORBIT_TURNS = 2;
+const FIREBALL_ORBIT_DURATION_MS = 520;
+const FIREBALL_THROW_TO_TOWER_MS = 560;
 const GWEN_DISPLAY_W = 34;
 const GWEN_DISPLAY_H = 50;
 const GWEN_REQUIRED_HEARTS = 6;
 const GWEN_MIN_SPAWN_X = 1600;
+const PORTAL_X = 900; // roughly mid-way before Gwen event
+const PORTAL_Y = 74; // intentionally high so player cannot reach it
+const PORTAL_SIZE = 78;
+const PORTAL_INNER_SCALE = 0.52;
 const GWEN_TOWER_WIDTH = 150;
 const GWEN_TOWER_HEIGHT = 470;
 const GWEN_SPAWN_AHEAD = 560;
@@ -57,6 +78,8 @@ export class GameScene extends Phaser.Scene {
   private player!: Player;
   private buildings!: Phaser.Physics.Arcade.StaticGroup;
   private hearts!: Phaser.GameObjects.Group;
+  private powerups!: Phaser.GameObjects.Group;
+  private fireballs!: Phaser.Physics.Arcade.Group;
   private deathZone!: Phaser.GameObjects.Rectangle;
   private floorTile!: Phaser.GameObjects.TileSprite;
   private parallaxImg!: Phaser.GameObjects.Image;
@@ -80,6 +103,19 @@ export class GameScene extends Phaser.Scene {
   private heartEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private restartKey!: Phaser.Input.Keyboard.Key;
   private heartsCollected = 0;
+  private thirdHeartCheckpointX = 0;
+  private thirdHeartCheckpointY = 0;
+  private fourthPowerup: Phaser.GameObjects.Image | null = null;
+  private fourthPowerupSpawned = false;
+  private fourthPowerupCollected = false;
+  private rewindGlitchActive = false;
+  private rewindOverlay: Phaser.GameObjects.Rectangle | null = null;
+  private rewindScanlines: Phaser.GameObjects.Graphics | null = null;
+  private fireballChallengeStarted = false;
+  private fireballChallengeComplete = false;
+  private fireballSpawnQueued = false;
+  private fireballsDodged = 0;
+  private activeFireball: Phaser.Physics.Arcade.Image | null = null;
   private gwen: Phaser.Physics.Arcade.Image | null = null;
   private gwenSpawned = false;
   private gwenFalling = false;
@@ -92,6 +128,8 @@ export class GameScene extends Phaser.Scene {
   private endText!: Phaser.GameObjects.Text;
   private questText!: Phaser.GameObjects.Text;
   private gwenIntroBubble: Phaser.GameObjects.Container | null = null;
+  private portal!: Phaser.GameObjects.Image;
+  private portalInner!: Phaser.GameObjects.Image;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -104,11 +142,13 @@ export class GameScene extends Phaser.Scene {
     this.load.image('bg', new URL('../assets/bg.png', import.meta.url).href);
     this.load.image('building1', new URL('../assets/building1.png', import.meta.url).href);
     this.load.image('building2', new URL('../assets/building2.png', import.meta.url).href);
+    this.load.image('spiral1', new URL('../assets/spiral1.png', import.meta.url).href);
     this.load.image('floor', new URL('../assets/floor.png', import.meta.url).href);
     this.load.image('parallax', new URL('../assets/parallax.png', import.meta.url).href);
     this.load.image('khambaa', new URL('../assets/khambaa.png', import.meta.url).href);
     this.load.image('web2', new URL('../assets/web2.png', import.meta.url).href);
     this.load.image('heart2', new URL('../assets/heart2.png', import.meta.url).href);
+    this.load.image('bomb', new URL('../assets/BOMB.png', import.meta.url).href);
     this.load.image('gwen', new URL('../assets/gwen.png', import.meta.url).href);
   }
 
@@ -118,16 +158,22 @@ export class GameScene extends Phaser.Scene {
     this.textures.get('sidewayspidey').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('building1').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('building2').setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.textures.get('spiral1').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('floor').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('parallax').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('khambaa').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('web2').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('heart2').setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.textures.get('bomb').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get('gwen').setFilter(Phaser.Textures.FilterMode.NEAREST);
 
     this.createBackground();
+    this.createFireballTextures();
     this.createBuildings();
+    this.createPortal();
     this.createPlayer();
+    this.thirdHeartCheckpointX = this.spawnX;
+    this.thirdHeartCheckpointY = this.spawnY;
     this.setupCollisions();
     this.setupCamera();
     this.setupSwing();
@@ -149,6 +195,10 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5)
       .setDisplaySize(800, 600)
       .setScrollFactor(0);
+  }
+
+  private createFireballTextures(): void {
+    this.textures.get('bomb').setFilter(Phaser.Textures.FilterMode.NEAREST);
   }
 
   // ── Buildings + Cranes ──
@@ -181,6 +231,51 @@ export class GameScene extends Phaser.Scene {
     (heart.body as Phaser.Physics.Arcade.StaticBody).updateFromGameObject();
 
     this.hearts.add(heart);
+  }
+
+  private createFourthHeartPowerup(worldX: number, rooftopTopY: number): void {
+    const powerup = this.add
+      .image(worldX, rooftopTopY - FOURTH_POWERUP_SIZE / 2, 'heart2')
+      .setDisplaySize(FOURTH_POWERUP_SIZE, FOURTH_POWERUP_SIZE)
+      .setOrigin(0.5, 0.5)
+      .setDepth(12)
+      .setTint(0x9be7ff);
+
+    this.physics.add.existing(powerup, true);
+    (powerup.body as Phaser.Physics.Arcade.StaticBody).setSize(FOURTH_POWERUP_SIZE - 2, FOURTH_POWERUP_SIZE - 2);
+    (powerup.body as Phaser.Physics.Arcade.StaticBody).updateFromGameObject();
+
+    this.tweens.add({
+      targets: powerup,
+      scaleX: 1.14,
+      scaleY: 1.14,
+      yoyo: true,
+      duration: 420,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    this.powerups.add(powerup);
+    this.fourthPowerup = powerup;
+    this.fourthPowerupSpawned = true;
+  }
+
+  private findRooftopTopYAtX(worldX: number): number | null {
+    let bestTopY = Number.POSITIVE_INFINITY;
+
+    for (const child of this.buildings.getChildren()) {
+      const building = child as Phaser.Physics.Arcade.Image;
+      const left = building.x - building.displayWidth / 2;
+      const right = building.x + building.displayWidth / 2;
+      if (worldX < left || worldX > right) continue;
+
+      const topY = building.y - building.displayHeight / 2;
+      if (topY < bestTopY) {
+        bestTopY = topY;
+      }
+    }
+
+    return Number.isFinite(bestTopY) ? bestTopY : null;
   }
 
   /**
@@ -220,6 +315,11 @@ export class GameScene extends Phaser.Scene {
   private createBuildings(): void {
     this.buildings = this.physics.add.staticGroup();
     this.hearts = this.add.group();
+    this.powerups = this.add.group();
+    this.fireballs = this.physics.add.group({
+      allowGravity: false,
+      immovable: true,
+    });
 
     this.floorTile = this.add
       .tileSprite(400, this.floorY - 6, 800, 12, 'floor')
@@ -233,6 +333,47 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.world.setBounds(0, 0, 99999, 660);
     this.cameras.main.setBounds(0, 0, 99999, 600);
+  }
+
+  private createPortal(): void {
+    this.portal = this.add
+      .image(PORTAL_X, PORTAL_Y, 'spiral1')
+      .setDisplaySize(PORTAL_SIZE, PORTAL_SIZE)
+      .setOrigin(0.5, 0.5)
+      .setDepth(9);
+
+    this.portalInner = this.add
+      .image(PORTAL_X, PORTAL_Y, 'spiral1')
+      .setDisplaySize(PORTAL_SIZE * PORTAL_INNER_SCALE, PORTAL_SIZE * PORTAL_INNER_SCALE)
+      .setOrigin(0.5, 0.5)
+      .setDepth(10)
+      .setAlpha(0.88);
+
+    // Decorative only: no physics body, unreachable height.
+    this.tweens.add({
+      targets: [this.portal, this.portalInner],
+      y: PORTAL_Y - 6,
+      duration: 1400,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    this.tweens.add({
+      targets: this.portal,
+      angle: 360,
+      duration: 3000,
+      repeat: -1,
+      ease: 'Linear',
+    });
+
+    this.tweens.add({
+      targets: this.portalInner,
+      angle: -360,
+      duration: 1900,
+      repeat: -1,
+      ease: 'Linear',
+    });
   }
 
   private buildingIndex = 0;
@@ -312,7 +453,31 @@ export class GameScene extends Phaser.Scene {
       this.heartEmitter.explode(2 + Math.floor(Math.random() * 2));
       heartImg.destroy();
       this.heartsCollected += 1;
+      if (this.heartsCollected === 3) {
+        this.thirdHeartCheckpointX = this.player.x;
+        this.thirdHeartCheckpointY = this.player.y;
+      }
       this.updateQuestUI();
+    });
+
+    this.physics.add.overlap(this.player, this.powerups, (_player, powerupObj) => {
+      if (this.fourthPowerupCollected || this.rewindGlitchActive) return;
+
+      const powerup = powerupObj as Phaser.GameObjects.Image;
+      this.fourthPowerupCollected = true;
+      this.fourthPowerupSpawned = false;
+      this.fourthPowerup = null;
+
+      this.heartEmitter.setPosition(powerup.x, powerup.y);
+      this.heartEmitter.explode(8 + Math.floor(Math.random() * 3));
+      powerup.destroy();
+      this.updateQuestUI();
+    });
+
+    this.physics.add.overlap(this.player, this.fireballs, () => {
+      if (!this.fireballChallengeStarted || this.fireballChallengeComplete || this.reunionInProgress) return;
+      this.resetFireballChallenge();
+      this.respawnPlayer();
     });
   }
 
@@ -348,6 +513,11 @@ export class GameScene extends Phaser.Scene {
 
     // Mouse / touch click to swing
     this.input.on('pointerdown', () => {
+      if (this.shouldPrioritizeFireballWeb()) {
+        this.tryWebThrowFireball();
+        return;
+      }
+
       if (this.shouldPrioritizeGwenWeb()) {
         if (this.tryPullPlayerToTowerTop()) {
           return;
@@ -423,11 +593,135 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  private maybeSpawnFourthHeartPowerup(): void {
+    if (this.fourthPowerupCollected || this.fourthPowerupSpawned || this.heartsCollected < 3) return;
+
+    const spawnX = this.player.x + FOURTH_POWERUP_SPAWN_AHEAD;
+    const rooftopTopY = this.findRooftopTopYAtX(spawnX);
+    if (rooftopTopY === null) return;
+
+    this.createFourthHeartPowerup(spawnX, rooftopTopY);
+    this.updateQuestUI();
+  }
+
+  private checkFourthPowerupMiss(): void {
+    if (!this.fourthPowerupSpawned || this.fourthPowerupCollected || !this.fourthPowerup || this.rewindGlitchActive) {
+      return;
+    }
+
+    if (this.player.x <= this.fourthPowerup.x + FOURTH_POWERUP_MISS_MARGIN) return;
+
+    this.triggerFourthPowerupMissRewind();
+  }
+
+  private triggerFourthPowerupMissRewind(): void {
+    if (this.rewindGlitchActive) return;
+
+    this.rewindGlitchActive = true;
+    this.endSwing();
+    this.player.setVelocity(0, 0);
+    this.player.isSwinging = true;
+
+    const cam = this.cameras.main;
+    const canvas = this.game.canvas as HTMLCanvasElement;
+    const prevFilter = canvas.style.filter;
+    canvas.style.filter = 'grayscale(1) contrast(1.45) brightness(0.8)';
+
+    this.rewindOverlay = this.add
+      .rectangle(400, 300, 800, 600, 0xffffff, 0.17)
+      .setScrollFactor(0)
+      .setDepth(120);
+
+    this.rewindScanlines = this.add.graphics().setScrollFactor(0).setDepth(121);
+    this.drawGlitchScanlines();
+
+    cam.shake(REWIND_GLITCH_DURATION_MS, 0.007);
+
+    const glitchTicks = Math.floor(REWIND_GLITCH_DURATION_MS / REWIND_GLITCH_TICK_MS);
+    this.time.addEvent({
+      delay: REWIND_GLITCH_TICK_MS,
+      repeat: glitchTicks,
+      callback: () => {
+        if (!this.rewindOverlay || !this.rewindScanlines) return;
+
+        this.rewindOverlay.alpha = 0.08 + Math.random() * 0.3;
+        this.rewindOverlay.x = 400 + Phaser.Math.Between(-6, 6);
+        this.rewindOverlay.y = 300 + Phaser.Math.Between(-5, 5);
+        this.drawGlitchScanlines();
+      },
+    });
+
+    this.time.delayedCall(REWIND_GLITCH_DURATION_MS, () => {
+      canvas.style.filter = prevFilter;
+      cam.shakeEffect.reset();
+      cam.setFollowOffset(0, 0);
+
+      this.rewindOverlay?.destroy();
+      this.rewindOverlay = null;
+      this.rewindScanlines?.destroy();
+      this.rewindScanlines = null;
+
+      this.rewindToThirdHeartCheckpoint();
+      this.rewindGlitchActive = false;
+      this.player.isSwinging = false;
+      this.updateQuestUI();
+    });
+  }
+
+  private drawGlitchScanlines(): void {
+    if (!this.rewindScanlines) return;
+
+    this.rewindScanlines.clear();
+    this.rewindScanlines.lineStyle(1, 0x000000, 0.08 + Math.random() * 0.12);
+    for (let y = Phaser.Math.Between(0, 4); y < 600; y += 5) {
+      const xJitter = Phaser.Math.Between(-12, 12);
+      this.rewindScanlines.lineBetween(xJitter, y, 800 + xJitter, y);
+    }
+  }
+
+  private rewindToThirdHeartCheckpoint(): void {
+    this.heartsCollected = 3;
+    this.player.setVelocity(0, 0);
+    this.player.setPosition(this.thirdHeartCheckpointX, this.thirdHeartCheckpointY);
+
+    if (this.fourthPowerup) {
+      this.fourthPowerup.destroy();
+      this.fourthPowerup = null;
+    }
+    this.fourthPowerupSpawned = false;
+    this.fourthPowerupCollected = false;
+
+    this.gwenSpawned = false;
+    this.gwenFalling = false;
+    this.gwenPullingUp = false;
+    this.playerPullingToTower = false;
+
+    this.gwen?.destroy();
+    this.gwen = null;
+    this.rescueTower?.destroy();
+    this.rescueTower = null;
+
+    this.fireballChallengeStarted = false;
+    this.fireballChallengeComplete = false;
+    this.fireballSpawnQueued = false;
+    this.fireballsDodged = 0;
+    this.activeFireball?.destroy();
+    this.activeFireball = null;
+    for (const child of this.fireballs.getChildren()) {
+      child.destroy();
+    }
+  }
+
   private updateQuestUI(): void {
     if (!this.questText) return;
 
     if (this.gameWon) {
       this.questText.setText('Mission Complete');
+      return;
+    }
+
+    if (this.rewindGlitchActive) {
+      this.questText.setText('Reality glitching...\nRewinding...');
       return;
     }
 
@@ -446,6 +740,15 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.fireballChallengeStarted && !this.fireballChallengeComplete) {
+      if (this.fireballsDodged < 3) {
+        this.questText.setText(`Fireballs incoming!\nJump dodge ${this.fireballsDodged}/3`);
+      } else {
+        this.questText.setText('Giant fireball!\nPress E to web-throw');
+      }
+      return;
+    }
+
     if (this.gwenSpawned && this.gwenFalling) {
       if (this.isPlayerOnTowerTopForSave()) {
         this.questText.setText('Gwen is falling!\nPress E to save her');
@@ -460,8 +763,240 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.heartsCollected >= 3 && !this.fourthPowerupCollected) {
+      if (this.fourthPowerupSpawned) {
+        this.questText.setText('Critical Powerup!\nDo not miss it');
+      } else {
+        this.questText.setText('Powerup incoming...\nStay sharp');
+      }
+      return;
+    }
+
     const hearts = Math.min(this.heartsCollected, GWEN_REQUIRED_HEARTS);
     this.questText.setText(`Find Gwen\nHearts ${hearts}/${GWEN_REQUIRED_HEARTS}`);
+  }
+
+  private shouldRunFireballChallenge(): boolean {
+    if (!this.gwenSpawned || !this.rescueTower) return false;
+    if (!this.fourthPowerupCollected) return false;
+    if (this.fireballChallengeComplete) return false;
+
+    return this.player.x >= this.rescueTower.x - FIREBALL_CHALLENGE_VIEW_X;
+  }
+
+  private maybeStartFireballChallenge(): void {
+    if (!this.shouldRunFireballChallenge() || this.fireballChallengeStarted) return;
+
+    this.fireballChallengeStarted = true;
+    this.fireballsDodged = 0;
+    this.activeFireball = null;
+    this.fireballSpawnQueued = false;
+    this.queueNextFireball(420);
+    this.updateQuestUI();
+  }
+
+  private queueNextFireball(delayMs: number): void {
+    if (!this.fireballChallengeStarted || this.fireballChallengeComplete || this.fireballSpawnQueued) return;
+
+    this.fireballSpawnQueued = true;
+    this.time.delayedCall(delayMs, () => {
+      this.fireballSpawnQueued = false;
+      if (!this.fireballChallengeStarted || this.fireballChallengeComplete || this.activeFireball) return;
+      this.spawnFireball();
+    });
+  }
+
+  private spawnFireball(): void {
+    const isBig = this.fireballsDodged >= 3;
+    const texture = 'bomb';
+    const size = isBig ? FIREBALL_BIG_SIZE : FIREBALL_SMALL_SIZE;
+    const speed = isBig ? FIREBALL_BIG_SPEED : FIREBALL_SMALL_SPEED;
+
+    const startX = this.player.x + FIREBALL_SPAWN_AHEAD;
+    const startY = this.player.y - (isBig ? 8 : 12);
+
+    const ball = this.fireballs.create(startX, startY, texture) as Phaser.Physics.Arcade.Image;
+    ball.setDisplaySize(size, size);
+    ball.setDepth(18);
+    ball.setVelocity(-speed, 0);
+    ball.setData('isBig', isBig);
+    ball.setData('webbed', false);
+
+    const body = ball.body as Phaser.Physics.Arcade.Body;
+    body.setCircle(size * 0.38);
+    body.setOffset(size * 0.12, size * 0.12);
+
+    this.activeFireball = ball;
+    this.updateQuestUI();
+  }
+
+  private updateFireballChallenge(): void {
+    if (!this.fireballChallengeStarted || this.fireballChallengeComplete) return;
+
+    if (!this.activeFireball || !this.activeFireball.active) {
+      this.activeFireball = null;
+      if (!this.fireballSpawnQueued) {
+        this.queueNextFireball(450);
+      }
+      return;
+    }
+
+    this.activeFireball.angle += this.activeFireball.getData('isBig') ? 6 : 9;
+
+    if (!this.activeFireball.getData('isBig') && this.activeFireball.x < this.player.x - 70) {
+      this.activeFireball.destroy();
+      this.activeFireball = null;
+      this.fireballsDodged += 1;
+      this.updateQuestUI();
+      this.queueNextFireball(380);
+      return;
+    }
+
+    if (this.activeFireball.getData('isBig') && this.activeFireball.x < this.player.x - 160) {
+      this.resetFireballChallenge();
+      this.respawnPlayer();
+    }
+  }
+
+  private tryWebThrowFireball(): boolean {
+    if (!this.fireballChallengeStarted || this.fireballChallengeComplete || !this.activeFireball) return false;
+    if (!this.activeFireball.active || !this.activeFireball.getData('isBig')) return false;
+    if (this.activeFireball.getData('webbed')) return false;
+
+    const dist = Phaser.Math.Distance.Between(
+      this.player.x,
+      this.player.y - 24,
+      this.activeFireball.x,
+      this.activeFireball.y
+    );
+
+    if (dist > FIREBALL_WEB_THROW_RANGE) return false;
+
+    this.activeFireball.setData('webbed', true);
+    this.activeFireball.setVelocity(0, 0);
+    this.activeFireball.setDepth(24);
+
+    const web = this.add.image(
+      (this.player.x + this.activeFireball.x) / 2,
+      (this.player.y - 24 + this.activeFireball.y) / 2,
+      'web2'
+    ).setDepth(22);
+
+    const updateWeb = () => {
+      if (!this.activeFireball) return;
+      const px = this.player.x;
+      const py = this.player.y - 24;
+      const fx = this.activeFireball.x;
+      const fy = this.activeFireball.y;
+      web.setPosition((px + fx) / 2, (py + fy) / 2);
+      web.setDisplaySize(Math.max(18, Phaser.Math.Distance.Between(px, py, fx, fy)), GWEN_WEB_VISUAL_HEIGHT);
+      web.setRotation(Phaser.Math.Angle.Between(px, py, fx, fy));
+    };
+
+    updateWeb();
+
+    const orbitCenterX = this.player.x;
+    const orbitCenterY = this.player.y - 24;
+    const startAngle = Phaser.Math.Angle.Between(
+      orbitCenterX,
+      orbitCenterY,
+      this.activeFireball.x,
+      this.activeFireball.y
+    );
+
+    const orbitObj = { t: 0 };
+    this.tweens.add({
+      targets: orbitObj,
+      t: 1,
+      duration: FIREBALL_ORBIT_DURATION_MS,
+      ease: 'Sine.easeInOut',
+      onUpdate: () => {
+        if (!this.activeFireball) return;
+
+        const a = startAngle + orbitObj.t * Math.PI * 2 * FIREBALL_ORBIT_TURNS;
+        const cx = this.player.x;
+        const cy = this.player.y - 24;
+        this.activeFireball.setPosition(
+          cx + Math.cos(a) * FIREBALL_ORBIT_RADIUS,
+          cy + Math.sin(a) * FIREBALL_ORBIT_RADIUS
+        );
+        this.activeFireball.angle += 18;
+        updateWeb();
+      },
+      onComplete: () => {
+        if (!this.activeFireball) {
+          web.destroy();
+          return;
+        }
+
+        const targetX = this.rescueTower ? this.rescueTower.x : this.activeFireball.x + FIREBALL_WEB_THROW_DIST;
+        const targetY = this.rescueTower ? this.rescueTowerTopY + 40 : this.activeFireball.y - 40;
+
+        this.tweens.add({
+          targets: this.activeFireball,
+          x: targetX,
+          y: targetY,
+          angle: this.activeFireball.angle + 720,
+          duration: FIREBALL_THROW_TO_TOWER_MS,
+          ease: 'Cubic.easeIn',
+          onUpdate: () => updateWeb(),
+          onComplete: () => {
+            web.destroy();
+            this.burstBombAt(targetX, targetY);
+            this.activeFireball?.destroy();
+            this.activeFireball = null;
+            this.fireballChallengeComplete = true;
+            this.updateQuestUI();
+          },
+        });
+      },
+    });
+
+    return true;
+  }
+
+  private burstBombAt(x: number, y: number): void {
+    this.cameras.main.shake(220, 0.004);
+
+    const particles = this.add.particles(x, y, 'bomb', {
+      lifespan: 480,
+      speed: { min: 80, max: 240 },
+      angle: { min: 0, max: 360 },
+      scale: { start: 0.22, end: 0 },
+      quantity: 18,
+      gravityY: 240,
+      blendMode: 'ADD',
+    }).setDepth(25);
+
+    this.time.delayedCall(520, () => particles.destroy());
+
+    const flash = this.add.circle(x, y, 26, 0xffe6a3, 0.8).setDepth(26);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scale: 2.6,
+      duration: 260,
+      ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  private resetFireballChallenge(): void {
+    this.activeFireball?.destroy();
+    this.activeFireball = null;
+    this.fireballSpawnQueued = false;
+    this.fireballsDodged = 0;
+    this.fireballChallengeStarted = this.shouldRunFireballChallenge();
+
+    for (const child of this.fireballs.getChildren()) {
+      child.destroy();
+    }
+
+    if (this.fireballChallengeStarted) {
+      this.queueNextFireball(420);
+    }
+
+    this.updateQuestUI();
   }
 
   private shouldPrioritizeGwenWeb(): boolean {
@@ -470,6 +1005,16 @@ export class GameScene extends Phaser.Scene {
     }
 
     return this.gwenFalling || this.gwenPullingUp || this.playerPullingToTower;
+  }
+
+  private shouldPrioritizeFireballWeb(): boolean {
+    return !!(
+      this.fireballChallengeStarted &&
+      !this.fireballChallengeComplete &&
+      this.activeFireball &&
+      this.activeFireball.active &&
+      this.activeFireball.getData('isBig')
+    );
   }
 
   private isPlayerOnTowerTopForSave(): boolean {
@@ -514,6 +1059,7 @@ export class GameScene extends Phaser.Scene {
 
   private updateWinCondition(): void {
     if (this.gameWon || this.reunionInProgress || !this.gwen || !this.rescueTower) return;
+    if (this.shouldRunFireballChallenge() && !this.fireballChallengeComplete) return;
 
     if (!this.gwenFalling) {
       const nearTowerX = Math.abs(this.player.x - this.rescueTower.x) <= GWEN_TRIGGER_RANGE_X;
@@ -782,7 +1328,8 @@ export class GameScene extends Phaser.Scene {
 
   /** Find the nearest crane tip within range and start swinging */
   private tryStartSwing(): void {
-    if (this.gameWon || this.reunionInProgress) return;
+    if (this.gameWon || this.reunionInProgress || this.rewindGlitchActive) return;
+    if (this.fireballChallengeStarted && !this.fireballChallengeComplete) return;
     if (this.player.isSwinging) return;
 
     const px = this.player.x;
@@ -837,8 +1384,18 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateSwing(delta: number): void {
+    if (this.rewindGlitchActive) {
+      this.webLine.clear();
+      return;
+    }
+
     // Check for E key press
     if (Phaser.Input.Keyboard.JustDown(this.swingKey)) {
+      if (this.shouldPrioritizeFireballWeb()) {
+        this.tryWebThrowFireball();
+        return;
+      }
+
       if (this.shouldPrioritizeGwenWeb()) {
         if (this.tryPullPlayerToTowerTop()) {
           return;
@@ -915,6 +1472,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.rewindGlitchActive) {
+      return;
+    }
+
     if (this.reunionInProgress) {
       return;
     }
@@ -946,8 +1507,14 @@ export class GameScene extends Phaser.Scene {
     // Swing system
     this.updateSwing(delta);
 
+    // 4th-heart powerup flow
+    this.maybeSpawnFourthHeartPowerup();
+    this.checkFourthPowerupMiss();
+
     // Gwen flow
     this.maybeSpawnGwen();
+    this.maybeStartFireballChallenge();
+    this.updateFireballChallenge();
     this.updateWinCondition();
   }
 }
