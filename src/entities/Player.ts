@@ -12,6 +12,7 @@ const RUN_TEXTURE = 'sidewayspidey';
 /** Breathing animation: spi1 (head up) + sp2 (head down) loop when idle */
 const BREATH_IDLE_DELAY_MS = 1200;
 const BREATH_FRAME_DURATION_MS = 650;
+const WALL_CONTACT_GRACE_MS = 120;
 
 export class Player extends Phaser.Physics.Arcade.Sprite {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
@@ -25,6 +26,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private idleTime = 0;
   private breathFrame = 0;
   private lastBreathTime = 0;
+  private wallContactGraceTime = 0;
+  private isClimbing = false;
 
   /** True while the player is mid-swing (movement handled externally) */
   public isSwinging = false;
@@ -68,7 +71,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   preUpdate(_time: number, delta: number): void {
     if (!this.isSwinging) {
-      this.handleMovement();
+      this.handleMovement(delta);
     }
     this.updateBreathing(delta);
   }
@@ -76,6 +79,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private updateBreathing(delta: number): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
     const isRunning = Math.abs(body.velocity.x) > 1 && !this.isSwinging;
+
+    // Keep climb sprite stable while attached to walls.
+    if (this.isClimbing) {
+      this.idleTime = 0;
+      return;
+    }
+
     const isIdle =
       this.body!.velocity.x === 0 &&
       this.body!.velocity.y === 0 &&
@@ -108,7 +118,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  private handleMovement(): void {
+  private handleMovement(delta: number): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
     const left = this.cursors.left.isDown || this.keys.a.isDown;
     const right = this.cursors.right.isDown || this.keys.d.isDown;
@@ -116,13 +126,30 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const down = this.cursors.down.isDown || this.keys.s.isDown;
     const jump = up || this.cursors.space.isDown;
 
-    const canClimb = (body.blocked.left || body.blocked.right) && !body.blocked.down;
+    const touchingWall =
+      body.blocked.left || body.blocked.right || body.touching.left || body.touching.right;
+
+    if (touchingWall) {
+      this.wallContactGraceTime = WALL_CONTACT_GRACE_MS;
+    } else {
+      this.wallContactGraceTime = Math.max(0, this.wallContactGraceTime - delta);
+    }
+
+    const canClimb = this.wallContactGraceTime > 0 && !body.blocked.down;
 
     if (canClimb) {
+      this.isClimbing = true;
       body.setAllowGravity(false);
       this.setVelocityX(0);
       this.setVelocityY(up ? -CLIMB_SPEED : down ? CLIMB_SPEED : 0);
+      this.setTexture('spi1');
+      if (body.blocked.left || body.touching.left) {
+        this.setFlipX(false);
+      } else if (body.blocked.right || body.touching.right) {
+        this.setFlipX(true);
+      }
     } else {
+      this.isClimbing = false;
       body.setAllowGravity(true);
       if (left && !right) {
         this.setVelocityX(-SPEED);

@@ -176,6 +176,9 @@ export class GameScene extends Phaser.Scene {
     this.thirdHeartCheckpointY = this.spawnY;
     this.setupCollisions();
     this.setupCamera();
+    this.lastCamX = this.cameras.main.scrollX;
+    this.parallaxScroll = 0;
+    this.updateParallaxVisual(this.lastCamX);
     this.setupSwing();
     this.addControlsHint();
     this.createQuestUI();
@@ -195,6 +198,19 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5)
       .setDisplaySize(800, 600)
       .setScrollFactor(0);
+  }
+
+  private updateParallaxVisual(_camX: number): void {
+    const cycle = PARALLAX_TRAVEL + PARALLAX_GAP;
+    const pos = ((this.parallaxScroll % cycle) + cycle) % cycle;
+
+    if (pos <= PARALLAX_TRAVEL) {
+      this.parallaxImg.setVisible(true);
+      // Start from far right and move left as scroll increases.
+      this.parallaxImg.x = 800 - pos;
+    } else {
+      this.parallaxImg.setVisible(false);
+    }
   }
 
   private createFireballTextures(): void {
@@ -1484,16 +1500,7 @@ export class GameScene extends Phaser.Scene {
     const camX = this.cameras.main.scrollX;
     this.parallaxScroll += (camX - this.lastCamX) * PARALLAX_SPEED;
     this.lastCamX = camX;
-
-    const cycle = PARALLAX_TRAVEL + PARALLAX_GAP;
-    const pos = ((this.parallaxScroll % cycle) + cycle) % cycle;
-
-    if (pos <= PARALLAX_TRAVEL) {
-      this.parallaxImg.setVisible(true);
-      this.parallaxImg.x = 400 + 400 - pos;
-    } else {
-      this.parallaxImg.setVisible(false);
-    }
+    this.updateParallaxVisual(camX);
 
     // Floor tile
     this.floorTile.x = camX + 400;
